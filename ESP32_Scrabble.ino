@@ -2074,14 +2074,27 @@ static void settingsFlow() {
 static Game g_game;
 static bool g_gameActive = false;          // a game exists (Continue is meaningful)
 
+// Pancake's edge-to-edge board (21 px cells) leaves the chrome below it room
+// to spare on its 480 px screen. The same edge-to-edge sizing on V8's 320 px
+// screen (15 px cells, full-size chrome) ran the score line about 30 px off
+// the bottom. V8 gets a deliberately smaller, letterboxed board plus a
+// compressed strip -- 26 px rack tiles match the touch-safe row height
+// already used for ITEMH above -- so the whole thing clears the nav bar.
+#ifdef MARAUDER_V8
+static const int G_CELL  = 12;                     // letterboxed, not edge-to-edge
+static const int G_BANH  = 14;
+static const int G_HINTH = 16;                     // room for the 14px VLW font
+static const int G_RT    = 26;                     // touch-safe min, not (SCRW-8)/RACK_N
+#else
 static const int G_CELL  = (SCRW - 4) / BOARD_N;   // fit-to-width cell (21 on Pancake)
-static const int G_CELLZ = G_CELL * 19 / 10;       // zoomed cell (~1.9x, 39-40 px)
-static const int G_BSZ   = G_CELL * BOARD_N;       // viewport height = fitted board
-static const int G_BANY  = HDRH;
 static const int G_BANH  = 20;
-static const int G_BY    = G_BANY + G_BANH + 2;    // board viewport top
 static const int G_HINTH = 18;
 static const int G_RT    = (SCRW - 8) / RACK_N;    // rack tile size
+#endif
+static const int G_CELLZ = G_CELL * 19 / 10;       // zoomed cell (~1.9x)
+static const int G_BSZ   = G_CELL * BOARD_N;       // viewport height = fitted board
+static const int G_BANY  = HDRH;
+static const int G_BY    = G_BANY + G_BANH + 2;    // board viewport top
 static const int G_LSY   = G_BY + G_BSZ + 2;       // lower strip top
 static const int G_LSH   = G_HINTH + G_RT + G_HINTH + 4;
 static const int G_RACKX = (SCRW - RACK_N * G_RT) / 2;
