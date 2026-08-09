@@ -1536,8 +1536,16 @@ static void dictionaryScreen() {
 // game, since a game in progress already has its bag filled.
 static const int DST_ROWH = 36;
 static const int DST_CHIPW = 26, DST_CHIPH = 22;
+// Pancake's chip positions put the rightmost chip's right edge at x=274 --
+// 34px past V8's 240px-wide screen. Same chip size (still a real tap target),
+// tighter spacing between them.
+#ifdef MARAUDER_V8
+static const int DST_VM = 42,  DST_VP = 88;     // value  [-] / [+]
+static const int DST_BM = 134, DST_BP = 180;    // bag    [-] / [+]
+#else
 static const int DST_VM = 60,  DST_VP = 124;    // value  [-] / [+]
 static const int DST_BM = 184, DST_BP = 248;    // bag    [-] / [+]
+#endif
 
 // Which stepper a tap hit: 0 val-, 1 val+, 2 bag-, 3 bag+, -1 none.
 static int dstChipAt(int x, int yInRow) {
@@ -2229,7 +2237,8 @@ static bool pendingIsBlankAt(uint8_t r, uint8_t c) {
 // board, the rack and the tile being dragged, so they can never drift apart.
 static void gTile(TFT_eSprite &g, const uint8_t *&track, int x, int y, int sz,
                   uint8_t letter, bool blank, uint16_t face, uint16_t edge,
-                  uint16_t textc, uint16_t valc, uint8_t value) {
+                  uint16_t textc, uint16_t valc, uint8_t value,
+                  bool showValue = true) {
   int rad = sz >= 30 ? 4 : 2;
   g.fillRoundRect(x, y, sz - 1, sz - 1, rad, face);
   g.drawRoundRect(x, y, sz - 1, sz - 1, rad, edge);
@@ -2239,7 +2248,7 @@ static void gTile(TFT_eSprite &g, const uint8_t *&track, int x, int y, int sz,
     sprStr(g, track, "?", x + sz / 2, y + sz / 2, sz >= 30 ? 4 : 2);
   } else {
     sprStr(g, track, tileGlyph(letter), x + sz / 2 - 1, y + sz / 2, sz >= 30 ? 4 : 2);
-    if (!blank) {
+    if (!blank && showValue) {
       g.setTextDatum(BR_DATUM);
       g.setTextColor(valc, face);
       sprStr(g, track, String((int)value), x + sz - 3, y + sz - 2, 1);
@@ -2259,6 +2268,18 @@ static void gPaintBoard(TFT_eSprite &g, const uint8_t *&track) {
   int c1 = c0 + SCRW / cs + 2;  if (c1 > BOARD_N) c1 = BOARD_N;
   int r1 = r0 + G_BSZ / cs + 2; if (r1 > BOARD_N) r1 = BOARD_N;
 
+#ifdef MARAUDER_V8
+  // At the fully-zoomed-out 13px cell, even the smallest VLW font (10px) runs
+  // 12-18px wide for these labels -- wider than the cell. There's no smaller
+  // VLW font to drop to, so this falls back to TFT_eSPI's built-in 6x8 GLCD
+  // font (already linked in; see the June font-trim pass) for that state only
+  // -- zoomed in, the 24px cell has room for the normal 10px font. Labels are
+  // collected here and drawn in one batch after the loop so the font is
+  // swapped once per redraw rather than once per premium square.
+  struct { int16_t x, y; uint16_t fill; const char *lbl; } tiny[80];
+  uint8_t nTiny = 0;
+#endif
+
   for (int r = r0; r < r1; r++) {
     for (int c = c0; c < c1; c++) {
       int x = ox + c * cs, y = oy + r * cs;
@@ -2276,9 +2297,19 @@ static void gPaintBoard(TFT_eSprite &g, const uint8_t *&track) {
         // foot and reads as "I" — which is where the stray "TI"/"DI" came from.
         bool whole = (x >= 0 && y >= 0 && x + cs <= SCRW && y + cs <= G_BSZ);
         if (lbl && whole) {
+#ifdef MARAUDER_V8
+          if (!g_zoom && nTiny < 80) {
+            tiny[nTiny++] = { (int16_t)(x + cs / 2), (int16_t)(y + cs / 2), fill, lbl };
+          } else {
+            g.setTextColor(P.prem_text, fill);
+            g.setTextDatum(MC_DATUM);
+            sprStr(g, track, lbl, x + cs / 2, y + cs / 2, 1);
+          }
+#else
           g.setTextColor(P.prem_text, fill);
           g.setTextDatum(MC_DATUM);
           sprStr(g, track, lbl, x + cs / 2, y + cs / 2, cs >= 30 ? 2 : 1);
+#endif
         } else if (p == PR_CENTRE) {
           g.fillCircle(x + cs / 2, y + cs / 2, cs / 6, P.prem_text);
         }
@@ -2288,11 +2319,30 @@ static void gPaintBoard(TFT_eSprite &g, const uint8_t *&track) {
         uint16_t face = pend ? P.tile_hold
                       : g_game.wasLastMove(r, c) ? P.tile_last : P.tile;
         bool blank = pend ? pendingIsBlankAt(r, c) : g_game.isBlankAt(r, c);
+#ifdef MARAUDER_V8
+        gTile(g, track, x, y, cs, letter, blank, face, P.tile_edge,
+              P.tile_text, P.tile_val, g_game.letterValue(letter), false);
+#else
         gTile(g, track, x, y, cs, letter, blank, face, P.tile_edge,
               P.tile_text, P.tile_val, g_game.letterValue(letter));
+#endif
       }
     }
   }
+
+#ifdef MARAUDER_V8
+  if (nTiny) {
+    g.unloadFont(); track = nullptr;   // next sprStr()/drawStr() call reloads its VLW font
+    g.setTextFont(1);
+    g.setTextSize(1);
+    g.setTextDatum(MC_DATUM);
+    for (uint8_t i = 0; i < nTiny; i++) {
+      g.setTextColor(P.prem_text, tiny[i].fill);
+      g.drawString(tiny[i].lbl, tiny[i].x, tiny[i].y);
+    }
+    g.setTextDatum(TL_DATUM);
+  }
+#endif
 
   // A rack tile riding the finger is drawn last so it floats above the board.
   if (g_dragRack >= 0) {
