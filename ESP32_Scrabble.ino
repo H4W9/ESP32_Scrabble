@@ -2077,25 +2077,33 @@ static bool g_gameActive = false;          // a game exists (Continue is meaning
 // Pancake's edge-to-edge board (21 px cells) leaves the chrome below it room
 // to spare on its 480 px screen. The same edge-to-edge sizing on V8's 320 px
 // screen (15 px cells, full-size chrome) ran the score line about 30 px off
-// the bottom. V8 gets a deliberately smaller, letterboxed board plus a
-// compressed strip -- 26 px rack tiles match the touch-safe row height
-// already used for ITEMH above -- so the whole thing clears the nav bar.
+// the bottom. V8 gets a deliberately smaller, letterboxed board and a
+// compressed strip so the whole thing clears the nav bar -- and every px the
+// banner/hint/rack/gaps give up below goes straight to the board, since that's
+// the one thing on this screen players actually want bigger. G_UIFONT drops
+// the lower strip's text to the 10px VLW font to match its shorter rows (the
+// 14px font used on Pancake would clip in a row this short).
 #ifdef MARAUDER_V8
-static const int G_CELL  = 12;                     // letterboxed, not edge-to-edge
-static const int G_BANH  = 14;
-static const int G_HINTH = 16;                     // room for the 14px VLW font
-static const int G_RT    = 26;                     // touch-safe min, not (SCRW-8)/RACK_N
+static const int G_CELL  = 13;                     // letterboxed, not edge-to-edge
+static const int G_BANH  = 11;
+static const int G_HINTH = 13;                     // sized for G_UIFONT, not the 14px font
+static const int G_RT    = 23;                     // smaller than the touch-safe ITEMH row;
+                                                    // this is a drag target, not a tap target
+static const int G_GAP   = 1;
+static const uint8_t G_UIFONT = 1;                 // 10px VLW font
 #else
 static const int G_CELL  = (SCRW - 4) / BOARD_N;   // fit-to-width cell (21 on Pancake)
 static const int G_BANH  = 20;
 static const int G_HINTH = 18;
 static const int G_RT    = (SCRW - 8) / RACK_N;    // rack tile size
+static const int G_GAP   = 2;
+static const uint8_t G_UIFONT = 2;                 // 14px VLW font
 #endif
 static const int G_CELLZ = G_CELL * 19 / 10;       // zoomed cell (~1.9x)
 static const int G_BSZ   = G_CELL * BOARD_N;       // viewport height = fitted board
 static const int G_BANY  = HDRH;
-static const int G_BY    = G_BANY + G_BANH + 2;    // board viewport top
-static const int G_LSY   = G_BY + G_BSZ + 2;       // lower strip top
+static const int G_BY    = G_BANY + G_BANH + G_GAP;    // board viewport top
+static const int G_LSY   = G_BY + G_BSZ + G_GAP;       // lower strip top
 static const int G_LSH   = G_HINTH + G_RT + G_HINTH + 4;
 static const int G_RACKX = (SCRW - RACK_N * G_RT) / 2;
 
@@ -2334,11 +2342,11 @@ static void gPaintLower(TFT_eSprite &g, const uint8_t *&track) {
     if (e == MV_OK) {
       int sc = g_game.scorePending(&words);
       g.setTextColor(COL_OK, COL_BG);
-      sprStr(g, track, words + "  +" + sc, SCRW / 2, G_HINTH / 2, 2);
+      sprStr(g, track, words + "  +" + sc, SCRW / 2, G_HINTH / 2, G_UIFONT);
     } else {
       g.setTextColor(COL_DIM, COL_BG);
       sprStr(g, track, e == MV_BAD_WORD ? "not a word" : "incomplete",
-             SCRW / 2, G_HINTH / 2, 2);
+             SCRW / 2, G_HINTH / 2, G_UIFONT);
     }
     g.setTextDatum(TL_DATUM);
   }
@@ -2395,12 +2403,12 @@ static void gPaintLower(TFT_eSprite &g, const uint8_t *&track) {
     bool cur = (p == g_game.current());
     g.setTextColor(cur ? COL_OK : COL_DIM, COL_BG);
     String s = String(g_game.player(p).name) + " " + g_game.player(p).score;
-    sprStr(g, track, s, x, sy + G_HINTH / 2, 2);
-    x += strWidth(s, 2) + 10;
+    sprStr(g, track, s, x, sy + G_HINTH / 2, G_UIFONT);
+    x += strWidth(s, G_UIFONT) + 10;
   }
   g.setTextColor(COL_DIM, COL_BG);
   g.setTextDatum(MR_DATUM);
-  sprStr(g, track, String("Bag ") + g_game.bagCount(), SCRW - 6, sy + G_HINTH / 2, 2);
+  sprStr(g, track, String("Bag ") + g_game.bagCount(), SCRW - 6, sy + G_HINTH / 2, G_UIFONT);
   g.setTextDatum(TL_DATUM);
 
 
@@ -2439,7 +2447,7 @@ static void gRenderTop() {
   if (g_banner.length()) {
     tft->setTextColor(contrastOn(bg), bg);
     tft->setTextDatum(MC_DATUM);
-    drawStr(g_banner, SCRW / 2, G_BANY + G_BANH / 2, 2);
+    drawStr(g_banner, SCRW / 2, G_BANY + G_BANH / 2, G_UIFONT);
     tft->setTextDatum(TL_DATUM);
   }
 }
@@ -2549,7 +2557,13 @@ static String mainWord(const String &words) {
 // repainted. Redrawing the whole screen per tap is what made this flash.
 static bool swapSkipDialog() {
   bool sel[RACK_N] = { false };
+  // 7 tiles at Pancake's 40px/4px sizing add up to 304px -- wider than V8's
+  // 240px screen, which is what ran this off both sides there.
+#ifdef MARAUDER_V8
+  const int tw = 30, gap = 3;
+#else
   const int tw = 40, gap = 4;
+#endif
   const int ty = CONTENTY + 96;
   const int x0 = (SCRW - (RACK_N * tw + (RACK_N - 1) * gap)) / 2;
   BoardPal P = theme.board();
@@ -2582,11 +2596,11 @@ static bool swapSkipDialog() {
   drawHeader("Swap/Skip", true);
   tft->setTextDatum(MC_DATUM);
   tft->setTextColor(COL_DIM, COL_BG);
-  drawStr("Choose the tiles you want to change.", SCRW / 2, CONTENTY + 26, 2);
-  drawStr("Select no tiles to just skip your turn.", SCRW / 2, CONTENTY + 48, 2);
+  drawStr("Choose the tiles you want to change.", SCRW / 2, CONTENTY + 26, G_UIFONT);
+  drawStr("Select no tiles to just skip your turn.", SCRW / 2, CONTENTY + 48, G_UIFONT);
   if (g_game.bagCount() < RACK_N) {
     tft->setTextColor(TFT_RED, COL_BG);
-    drawStr("Too few tiles in the bag to swap.", SCRW / 2, ty + tw + 22, 2);
+    drawStr("Too few tiles in the bag to swap.", SCRW / 2, ty + tw + 22, G_UIFONT);
   }
   tft->setTextDatum(TL_DATUM);
   for (int i = 0; i < RACK_N; i++) drawTile(i);
