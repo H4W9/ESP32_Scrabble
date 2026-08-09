@@ -1,0 +1,34 @@
+# =====================================================================
+#  Publish exclusions
+# =====================================================================
+
+# Design notes / internal roadmap — not part of the shipped project.
+PLAN.md
+
+# Reference material 
+example/
+
+# Reference photo 
+Scrabble.jpg
+
+# The private word lists and the plain-text dumps, kept out.
+sd_prep/scrabble_out_private/
+sd_prep/scrabble_out/*.txt
+
+# =====================================================================
+#  Build / scratch output
+# =====================================================================
+build/
+sd_prep/__pycache__/
+sd_prep/preview_board*.png
+preview_board*.png
+
+# =====================================================================
+#  OS / editor cruft
+# =====================================================================
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+.idea/
