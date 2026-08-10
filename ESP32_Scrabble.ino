@@ -2242,12 +2242,16 @@ static void gTile(TFT_eSprite &g, const uint8_t *&track, int x, int y, int sz,
   int rad = sz >= 30 ? 4 : 2;
   g.fillRoundRect(x, y, sz - 1, sz - 1, rad, face);
   g.drawRoundRect(x, y, sz - 1, sz - 1, rad, edge);
+  // Letter font scales with the tile: font 4 (30px) on the big zoomed cell,
+  // font 2 (14px) at mid sizes, and the small smooth font 1 (10px) on the tiny
+  // fully-zoomed-out V8 cell (13px), where font 2 would overrun the tile.
+  const uint8_t lf = sz >= 30 ? 4 : sz >= 18 ? 2 : 1;
   g.setTextColor(textc, face);
   g.setTextDatum(MC_DATUM);
   if (letter == TILE_BLANK) {
-    sprStr(g, track, "?", x + sz / 2, y + sz / 2, sz >= 30 ? 4 : 2);
+    sprStr(g, track, "?", x + sz / 2, y + sz / 2, lf);
   } else {
-    sprStr(g, track, tileGlyph(letter), x + sz / 2 - 1, y + sz / 2, sz >= 30 ? 4 : 2);
+    sprStr(g, track, tileGlyph(letter), x + sz / 2 - 1, y + sz / 2, lf);
     if (!blank && showValue) {
       g.setTextDatum(BR_DATUM);
       g.setTextColor(valc, face);
@@ -2320,8 +2324,10 @@ static void gPaintBoard(TFT_eSprite &g, const uint8_t *&track) {
                       : g_game.wasLastMove(r, c) ? P.tile_last : P.tile;
         bool blank = pend ? pendingIsBlankAt(r, c) : g_game.isBlankAt(r, c);
 #ifdef MARAUDER_V8
+        // The 13px zoomed-out cell has no room for the corner value; the ~24px
+        // zoomed-in cell does, so show it only while zoomed in.
         gTile(g, track, x, y, cs, letter, blank, face, P.tile_edge,
-              P.tile_text, P.tile_val, g_game.letterValue(letter), false);
+              P.tile_text, P.tile_val, g_game.letterValue(letter), g_zoom);
 #else
         gTile(g, track, x, y, cs, letter, blank, face, P.tile_edge,
               P.tile_text, P.tile_val, g_game.letterValue(letter));
