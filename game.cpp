@@ -4,6 +4,7 @@
 #include "letters.h"
 #include "wordedit.h"
 #include <SD.h>
+#include <esp_random.h>          // esp_random() for the per-game reseed in begin()
 
 // Tile bags now live in letters.cpp as an EDITABLE distribution (Settings ->
 // Letters), so the engine reads whatever the player has configured rather than
@@ -134,6 +135,14 @@ void Game::refill(uint8_t p) {
 }
 
 void Game::begin(const Dawg *dict, uint8_t lang, uint8_t numPlayers) {
+  // Reseed here, per new game, rather than trusting the boot seed. esp_random()
+  // is only well-seeded once the RF subsystem is up (at boot it can return a
+  // fixed value, and randomSeed ignores a 0 seed), which made every fresh boot
+  // deal the same bag. By the time a game starts the radio is up and micros()
+  // has drifted with the player's menu navigation, so the two together give a
+  // fresh, non-zero seed every game.
+  randomSeed((uint32_t)esp_random() ^ (uint32_t)micros() ^ 1u);
+
   _dict = dict;
   _lang = lang;
   _nplayers = constrain(numPlayers, 2, MAX_PLAYERS);

@@ -1113,6 +1113,18 @@ static bool dictLoad(bool showProgress) {
                   LANG_FILES[g_lang], (unsigned long)g_dawg.wordCount(),
                   (unsigned long)g_dawg.edgeCount(),
                   (unsigned)(g_dawg.bytes() / 1024), (unsigned long)ms);
+    // Also load the reduced "human-like" list the CPU plays from. It is a
+    // separate ~0.14 MB DAWG in PSRAM; without this load cpuDict() could never
+    // reach it, so the opponent silently used the full list and Settings always
+    // read "No list!". A missing file stays non-fatal — cpuDict() falls back to
+    // the full list and the setting then correctly shows "No list!".
+    if (g_dawgCpu.load(LANG_COMMON[g_lang]))
+      Serial.printf("[Dict] %s: %lu words (CPU list)\n",
+                    LANG_COMMON[g_lang], (unsigned long)g_dawgCpu.wordCount());
+    else {
+      Serial.printf("[Dict] %s not loaded: %s\n", LANG_COMMON[g_lang], g_dawgCpu.error());
+      g_dawgCpu.unload();
+    }
   } else {
     Serial.printf("[Dict] %s failed: %s\n", LANG_FILES[g_lang], g_dawg.error());
   }
