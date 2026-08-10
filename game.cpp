@@ -29,44 +29,23 @@ bool Game::isVowel(uint8_t t) {
          t == 0x80 || t == 0x82 || t == 0x84;      // Ae Oe Ue
 }
 
-// A plain Fisher-Yates shuffle is uniform over orderings, which is exactly why
-// it hands out four Is and no vowels often enough to spoil a game. So the bag is
-// not shuffled but INTERCALATED: the tiles are grouped by letter, then dealt out
-// one group at a time in a random order each round. Every copy of a letter
-// therefore ends up about one round apart, so a run of identical draws is
-// structurally impossible while the order stays unpredictable.
+// Plain uniform Fisher-Yates.
+//
+// This was briefly an "intercalating" shuffle (group by letter, deal one of each
+// per round) meant to stop clumps like four Is in a row. It backfired badly: it
+// made the DRAW END of the bag nearly identical from one shuffle to the next, so
+// the luck helper -- which scans from that end -- dealt the SAME opening rack
+// every single game (AEENRTT in English), regardless of the seed. Balancing the
+// rack is the luck helper's job (refill/drawTilePreferring); the shuffle's job
+// is just to be uniformly random, which this is.
+//
+// esp_random() is used directly rather than Arduino random(): it is a hardware
+// TRNG that varies every call with no seeding, so the bag can never repeat even
+// if random()/randomSeed() misbehave on a given core.
 void Game::shuffleBag() {
-  uint8_t letters[DIST_MAX_ENTRIES], counts[DIST_MAX_ENTRIES], nGroups = 0;
-  for (uint8_t i = 0; i < _bagN; i++) {
-    uint8_t k = 0;
-    while (k < nGroups && letters[k] != _bag[i]) k++;
-    if (k == nGroups) {
-      if (nGroups >= DIST_MAX_ENTRIES) continue;   // can't happen: the bag is
-      letters[nGroups] = _bag[i];                  // built from that same table
-      counts[nGroups] = 0;
-      nGroups++;
-    }
-    counts[k]++;
-  }
-
-  uint8_t out = 0;
-  while (out < _bagN) {
-    // Deal one tile from every group that still has any, in a fresh order.
-    uint8_t ord[DIST_MAX_ENTRIES];
-    for (uint8_t i = 0; i < nGroups; i++) ord[i] = i;
-    for (int i = nGroups - 1; i > 0; i--) {
-      int j = random(i + 1);
-      uint8_t t = ord[i]; ord[i] = ord[j]; ord[j] = t;
-    }
-    bool dealt = false;
-    for (uint8_t i = 0; i < nGroups && out < _bagN; i++) {
-      uint8_t gi = ord[i];
-      if (!counts[gi]) continue;
-      counts[gi]--;
-      _bag[out++] = letters[gi];
-      dealt = true;
-    }
-    if (!dealt) break;                    // every group empty; nothing left to place
+  for (int i = _bagN - 1; i > 0; i--) {
+    int j = (int)(esp_random() % (uint32_t)(i + 1));
+    uint8_t t = _bag[i]; _bag[i] = _bag[j]; _bag[j] = t;
   }
 }
 
