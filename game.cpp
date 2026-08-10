@@ -29,22 +29,33 @@ bool Game::isVowel(uint8_t t) {
          t == 0x80 || t == 0x82 || t == 0x84;      // Ae Oe Ue
 }
 
-// Plain uniform Fisher-Yates.
+// Fast PRNG (xorshift32) for the shuffle, seeded ONCE per shuffle from the
+// hardware RNG.
 //
-// This was briefly an "intercalating" shuffle (group by letter, deal one of each
-// per round) meant to stop clumps like four Is in a row. It backfired badly: it
-// made the DRAW END of the bag nearly identical from one shuffle to the next, so
-// the luck helper -- which scans from that end -- dealt the SAME opening rack
-// every single game (AEENRTT in English), regardless of the seed. Balancing the
-// rack is the luck helper's job (refill/drawTilePreferring); the shuffle's job
-// is just to be uniformly random, which this is.
-//
-// esp_random() is used directly rather than Arduino random(): it is a hardware
-// TRNG that varies every call with no seeding, so the bag can never repeat even
-// if random()/randomSeed() misbehave on a given core.
+// The bag shuffle has now been wrong twice, and the reason both times was the
+// randomness source, not the Fisher-Yates:
+//   1. An "intercalating" shuffle made the bag's draw end uniform, so the luck
+//      helper dealt the same opening rack every game whatever the seed.
+//   2. A plain Fisher-Yates that called esp_random() PER SWAP still repeated,
+//      because on this chip esp_random() returns the same value when polled in a
+//      tight loop before the radio is up -- freezing it into one permutation.
+// So esp_random() is read exactly ONCE here to inject entropy, mixed with
+// micros() (which drifts with how long the player spent in the menus) and with
+// the state carried from the previous shuffle, then a cheap software PRNG does
+// the per-swap work. That gives a genuinely different bag every game.
+static uint32_t g_rngState = 0x9E3779B9u;
+static inline uint32_t rngNext() {
+  uint32_t s = g_rngState;
+  s ^= s << 13; s ^= s >> 17; s ^= s << 5;
+  g_rngState = s ? s : 0x9E3779B9u;         // xorshift must never sit at 0
+  return g_rngState;
+}
+
 void Game::shuffleBag() {
+  g_rngState ^= esp_random() ^ (uint32_t)micros();
+  if (g_rngState == 0) g_rngState = 0x9E3779B9u;
   for (int i = _bagN - 1; i > 0; i--) {
-    int j = (int)(esp_random() % (uint32_t)(i + 1));
+    int j = (int)(rngNext() % (uint32_t)(i + 1));
     uint8_t t = _bag[i]; _bag[i] = _bag[j]; _bag[j] = t;
   }
 }
@@ -147,6 +158,14 @@ void Game::begin(const Dawg *dict, uint8_t lang, uint8_t numPlayers) {
     memset(_players[p].rack, TILE_EMPTY, RACK_N);
   }
   for (uint8_t p = 0; p < _nplayers; p++) refill(p);
+
+  // Diagnostic: the opening rack should differ every new game. If this line
+  // shows the SAME letters game after game, the shuffle RNG is not varying (read
+  // the rngState value); if the rack varies here but the screen does not, the
+  // build on the device is stale. Safe to delete once confirmed working.
+  Serial.printf("[Deal] rng=%08X rack=", (unsigned)g_rngState);
+  for (uint8_t i = 0; i < RACK_N; i++) Serial.printf("%c", _players[0].rack[i]);
+  Serial.println();
 }
 
 void Game::setPlayer(uint8_t i, const char *name, bool isCpu, uint8_t cpuLevel) {
