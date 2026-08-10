@@ -17,7 +17,7 @@
 // time; it stays "dev" for local builds.
 #define FW_NAME    "Scrabble"
 #define FW_AUTHOR  "H4W9"
-#define FW_VERSION "0.1.0"
+#define FW_VERSION "0.1.1"
 #ifndef FW_COMMIT
 #define FW_COMMIT  "dev"
 #endif
