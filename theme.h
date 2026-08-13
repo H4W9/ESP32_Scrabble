@@ -9,6 +9,7 @@
 #include <Arduino.h>
 #include <SPIFFS.h>
 #include "board_theme.h"
+#include "persist.h"   // SD-preferred (SPIFFS-fallback) storage for the UI blob
 
 // Colour themes (RGB565): bg, fg, header, dim, dark?, name
 struct ThemeDef { uint16_t bg, fg, hdr, dim; bool dark; const char *name; };
@@ -85,7 +86,7 @@ struct Theme {
   uint8_t theme_idx  = PW_THEME_CLASSIC;
   uint8_t bright     = 15;                     // screen backlight, 0..19
   uint8_t led_bright = 4;                      // RGB status LED, 0..20 (0 = off)
-  uint8_t board_pal  = 0;                      // 0 = Classic, 1 = Match Theme
+  uint8_t board_pal  = 0;                      // Grid Look: 0..BOARD_PAL_FIXED-1, last = Match Theme
   uint8_t acc_by_theme[PW_THEME_COUNT];        // 0 = Default (themeHighlight), else accent+1
   uint8_t fc_by_theme[PW_THEME_COUNT];         // 0 = Default (theme fg), else PW_FONTCOL_VAL idx
 
@@ -135,11 +136,12 @@ struct Theme {
   }
   uint16_t edge() const { return dark() ? 0x2104 : 0xC618; }
 
-  // Active board/tile palette. Default is the Classic look.
+  // Active board/tile palette. The last index is the theme-derived one; every
+  // other index selects a fixed palette from the Grid Look gallery.
   BoardPal board() const {
     return board_pal == BOARD_PAL_THEME
              ? boardPalFromTheme(bg(), fg(), dim(), dark())
-             : BOARD_CLASSIC;
+             : BOARD_PALS[board_pal % BOARD_PAL_FIXED];
   }
   const char *boardPalName() const { return BOARD_PAL_NAMES[board_pal % BOARD_PAL_COUNT]; }
   void cycleBoardPal(bool fwd) {
@@ -180,7 +182,7 @@ struct Theme {
   }
   void load() {
     defaults();
-    File f = SPIFFS.open("/pico_ui.dat", FILE_READ);
+    File f = persistRead("pico_ui.dat");
     if (f && f.size() >= (size_t)(2 + 2 * PW_THEME_COUNT)) {
       theme_idx = (uint8_t)f.read();
       bright    = (uint8_t)f.read();
@@ -200,7 +202,7 @@ struct Theme {
     }
   }
   void save() {
-    File f = SPIFFS.open("/pico_ui.dat", FILE_WRITE);
+    File f = persistWrite("pico_ui.dat");
     if (!f) return;
     f.write(theme_idx);
     f.write(bright);

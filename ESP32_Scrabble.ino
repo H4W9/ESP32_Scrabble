@@ -106,10 +106,25 @@ static const char *const LANG_COMMON[2] = { SCRABBLE_DIR "/de_common.dwg",
 // above these types would push the prototypes above them and break the build.
 static Dawg    g_dawg;                 // full word list, used for validation (PSRAM)
 static Dawg    g_dawgCpu;              // reduced list the CPU plays from (PSRAM)
-static uint8_t g_lang = LANG_DE;       // persisted in /scrab_cfg.json
+static uint8_t g_lang = LANG_DE;       // persisted in scrab_cfg.json
 static bool    g_cpuCommon = true;     // "human-like vocabulary" for the CPU
 static bool    g_luckHelper = true;    // balanced bag + steered draws (Game::refill)
 static uint8_t g_crossLimit = MAX_CROSS_WORDS;   // parallel words a play may form
+
+// SD is where the dictionaries live; settings + stats prefer it too (persist.h),
+// falling back to SPIFFS when no card is mounted. Set from SD.begin() in setup().
+bool g_persistSD = false;              // persist.h backend flag
+
+// ── Player statistics (persisted scrab_stats.json) ──────────────────────────
+// Recorded for the human player(s) only. A completed game bumps g_stGames, and
+// g_stWins when a non-CPU player finished as leader; g_stHiScore tracks a human's
+// best final score; g_stBestWord(Pts) the highest-scoring single word a human
+// has laid down. Small enough to rewrite on every record, like Sudoku's stats.
+static uint16_t g_stGames = 0;
+static uint16_t g_stWins = 0;
+static uint16_t g_stHiScore = 0;
+static uint16_t g_stBestWordPts = 0;
+static char     g_stBestWord[20] = {0};
 
 // The word list the move generator should search. Falls back to the full list
 // if the reduced one is switched off or missing from the SD card.
@@ -287,9 +302,9 @@ static inline void ledBlinkOk(uint16_t ms = 150) { ledOk(); delay(ms); ledOff();
 static void ledSet(bool on) { if (on) ledWifi(); else ledOff(); }
 #endif // HAS_ACT_LED
 
-// Game config (SPIFFS: /scrab_cfg.json) — currently just the language.
+// Game config (scrab_cfg.json, on SD when present else SPIFFS — see persist.h).
 static void cfgLoad() {
-  File f = SPIFFS.open("/scrab_cfg.json", FILE_READ);
+  File f = persistRead("scrab_cfg.json");
   if (!f) return;
   JsonDocument d;
   DeserializationError e = deserializeJson(d, f);
@@ -313,10 +328,48 @@ static void cfgSave() {
   d["luck"] = g_luckHelper;
   d["cross"] = g_crossLimit;
   d["grid"] = g_gridName;
-  File w = SPIFFS.open("/scrab_cfg.json", FILE_WRITE);
+  File w = persistWrite("scrab_cfg.json");
   if (!w) return;
   serializeJson(d, w);
   w.close();
+}
+
+// Player statistics (scrab_stats.json, SD-preferred like the config above).
+static void statsLoad() {
+  File f = persistRead("scrab_stats.json");
+  if (!f) return;
+  JsonDocument d;
+  DeserializationError e = deserializeJson(d, f);
+  f.close();
+  if (e) return;
+  g_stGames       = d["games"]   | 0;
+  g_stWins        = d["wins"]    | 0;
+  g_stHiScore     = d["hi"]      | 0;
+  g_stBestWordPts = d["bwpts"]   | 0;
+  const char *bw  = d["bword"]   | "";
+  strncpy(g_stBestWord, bw, sizeof(g_stBestWord) - 1);
+  g_stBestWord[sizeof(g_stBestWord) - 1] = 0;
+  if (g_stWins > g_stGames) g_stWins = g_stGames;   // guard a corrupt file
+}
+static void statsSave() {
+  JsonDocument d;
+  d["games"] = g_stGames;
+  d["wins"]  = g_stWins;
+  d["hi"]    = g_stHiScore;
+  d["bwpts"] = g_stBestWordPts;
+  d["bword"] = g_stBestWord;
+  File w = persistWrite("scrab_stats.json");
+  if (!w) return;
+  serializeJson(d, w);
+  w.close();
+}
+// Note a human's just-played word; persists only when it beats the record.
+static void statsNoteWord(const String &word, int pts) {
+  if (pts <= (int)g_stBestWordPts) return;
+  g_stBestWordPts = (uint16_t)pts;
+  strncpy(g_stBestWord, word.c_str(), sizeof(g_stBestWord) - 1);
+  g_stBestWord[sizeof(g_stBestWord) - 1] = 0;
+  statsSave();
 }
 
 // Saved WiFi networks (SPIFFS: /scrab_wifi.json = {"nets":[{"s","p"}]})
@@ -1810,7 +1863,7 @@ static void drawSettingRow(int row, int sel, int y) {
     case 0: drawChipRow(y, "Theme",      setChipVal(0), false, s, 0); break;
     case 1: drawChipRow(y, "Accent",     setChipVal(1), false, s, 0); break;
     case 2: drawChipRow(y, "Font Color", setChipVal(2), false, s, theme.fontColPreview()); break;
-    case 3: drawChipRow(y, "Board",      setChipVal(3), false, s, 0); break;
+    case 3: drawInfoRow(y, "Grid Look",  setChipVal(3), s); break;
     case 4: drawChipRow(y, "Language",   setChipVal(4), false, s, 0); break;
     case 5: drawInfoRow(y, "Letters",    g_dist.edited(g_lang) ? String("edited") : String(""), s); break;
     case 6: drawChipRow(y, "CPU Words",  setChipVal(6), false, s, 0); break;
@@ -1836,7 +1889,7 @@ static void sprSettingRow(TFT_eSprite &spr, const uint8_t *&sf, int row, int sel
     case 0: sprChipRow(spr, sf, y, "Theme",      setChipVal(0), false, s, 0); break;
     case 1: sprChipRow(spr, sf, y, "Accent",     setChipVal(1), false, s, 0); break;
     case 2: sprChipRow(spr, sf, y, "Font Color", setChipVal(2), false, s, theme.fontColPreview()); break;
-    case 3: sprChipRow(spr, sf, y, "Board",      setChipVal(3), false, s, 0); break;
+    case 3: sprInfoRow(spr, sf, y, "Grid Look",  setChipVal(3), s); break;
     case 4: sprChipRow(spr, sf, y, "Language",   setChipVal(4), false, s, 0); break;
     case 5: sprInfoRow(spr, sf, y, "Letters",    g_dist.edited(g_lang) ? String("edited") : String(""), s); break;
     case 6: sprChipRow(spr, sf, y, "CPU Words",  setChipVal(6), false, s, 0); break;
@@ -1908,6 +1961,170 @@ static void aboutScreen() {
 
   statusLine("Tap to go back.", COL_DIM);
   uint16_t x, ty; waitTap(x, ty);
+}
+
+// ── Statistics — completed games, wins and personal-best records. ────────────
+static void statsScreen() {
+  tft->fillScreen(COL_BG);
+  drawHeader("Statistics", true);
+#ifdef MARAUDER_V8
+  int y = CONTENTY + 12, rowH = 24; const int valX = 150;
+#else
+  int y = CONTENTY + 18, rowH = 32; const int valX = 200;
+#endif
+  tft->setTextDatum(TL_DATUM);
+  auto row = [&](const char *label, const String &value) {
+    tft->setTextColor(COL_DIM, COL_BG); drawStr(label, 16, y, 2);
+    tft->setTextColor(COL_FG,  COL_BG); drawStr(value, valX, y, 2);
+    y += rowH;
+  };
+  int winPct = g_stGames ? (int)((g_stWins * 100UL) / g_stGames) : 0;
+  row("Games played", String(g_stGames));
+  row("Wins",         String(g_stWins));
+  row("Win rate",     g_stGames ? (String(winPct) + "%") : String("--"));
+  y += 4;
+  tft->drawFastHLine(16, y, SCRW - 32, theme.edge()); y += rowH / 2;
+  row("Best score",   g_stHiScore ? String(g_stHiScore) : String("--"));
+  // Best word: the stored letters are private-encoded; drawStr converts them.
+  if (g_stBestWordPts > 0) row("Best word", String(g_stBestWord) + " (" + g_stBestWordPts + ")");
+  else                     row("Best word", "--");
+
+  if (!g_persistSD) {
+    tft->setTextColor(COL_DIM, COL_BG);
+    drawStr("No SD card - stats kept on flash.", 16, SCRH - 40, 1);
+  }
+  statusLine("Tap to go back.", COL_DIM);
+  uint16_t tx, ty; waitTap(tx, ty);
+}
+
+// ── Grid Look picker — a full-screen gallery of board/tile palette swatches ──
+// Resolve a palette by cycle index (the last index is the theme-derived one).
+static BoardPal palByIndex(uint8_t i) {
+  if (i >= BOARD_PAL_THEME) return boardPalFromTheme(theme.bg(), theme.fg(), theme.dim(), theme.dark());
+  return BOARD_PALS[i % BOARD_PAL_FIXED];
+}
+// One swatch: a 4x4 mini board in the palette — the four premium squares, some
+// empty cells and two tiles (a plain one, a "last move" one) — with its name
+// below and a ring when it is the current choice.
+static void drawSwatchSpr(TFT_eSprite &g, const uint8_t *&tk, int sx, int sy,
+                          int slotW, int slotH, uint8_t idx, bool selected,
+                          int labelH, uint8_t labelF) {
+  BoardPal bp = palByIndex(idx);
+  const int pad = 5;
+  int avail = min(slotW - 2 * pad, slotH - labelH - 2 * pad);
+  if (avail < 12) avail = 12;
+  int cell = avail / 4, S = cell * 4;
+  int ssx = sx + (slotW - S) / 2, ssy = sy + pad;
+
+  // Board background = gutter; cells drawn 1px inset so the gutter reads as lines.
+  g.fillRect(ssx, ssy, S, S, bp.gutter);
+  const uint16_t fill[4][4] = {
+    { bp.tw,    bp.empty, bp.empty, bp.tl        },
+    { bp.empty, bp.dw,    bp.dl,    bp.empty      },
+    { bp.empty, bp.dl,    bp.dw,    bp.empty      },
+    { bp.tile,  bp.empty, bp.empty, bp.tile_last  },
+  };
+  for (int r = 0; r < 4; r++)
+    for (int c = 0; c < 4; c++)
+      g.fillRect(ssx + c * cell, ssy + r * cell, cell - 1, cell - 1, fill[r][c]);
+
+  if (cell >= 12) {                          // letter the two tile cells
+    uint8_t df = (cell >= 18) ? 2 : 1;
+    g.setTextDatum(MC_DATUM);
+    g.setTextColor(bp.tile_text);
+    sprStr(g, tk, "A", ssx + cell / 2,             ssy + 3 * cell + cell / 2, df);
+    sprStr(g, tk, "Z", ssx + 3 * cell + cell / 2,  ssy + 3 * cell + cell / 2, df);
+  }
+
+  g.setTextDatum(MC_DATUM);
+  g.setTextColor(selected ? theme.sel() : COL_FG, COL_BG);
+  sprStr(g, tk, BOARD_PAL_NAMES[idx], sx + slotW / 2, ssy + S + labelH / 2 + 1, labelF);
+  g.setTextDatum(TL_DATUM);
+  if (selected) {
+    g.drawRoundRect(sx + 2, sy + 1, slotW - 4, slotH - 2, 6, theme.sel());
+    g.drawRoundRect(sx + 3, sy + 2, slotW - 6, slotH - 4, 6, theme.sel());
+  }
+}
+static void gridPickerScreen() {
+#ifdef MARAUDER_V8
+  const int COLS = 2, SLOTH = 94, LABELH = 13; const uint8_t LABELF = 1;
+#else
+  const int COLS = 3, SLOTH = 86, LABELH = 16; const uint8_t LABELF = 2;
+#endif
+  const int NPAL  = BOARD_PAL_COUNT;
+  const int slotW = SCRW / COLS;
+  const int nrows = (NPAL + COLS - 1) / COLS;
+  const int CY = CONTENTY, CH = SCRH - CONTENTY;
+  const int total = nrows * SLOTH;
+
+  tft->fillScreen(COL_BG);
+  drawHeader("Grid Look", true);
+
+  TFT_eSprite spr(tft);
+  spr.setColorDepth(16);
+  if (!spr.createSprite(SCRW, CH)) {
+    msgScreen("Grid Look", "Out of memory", "The palette gallery needs PSRAM.", TFT_RED);
+    return;
+  }
+  const uint8_t *tk = nullptr;
+  float scroll = 0, fling = 0;
+
+  auto render = [&]() {
+    float maxS = total > CH ? total - CH : 0;
+    if (scroll < 0) scroll = 0;
+    if (scroll > maxS) scroll = maxS;
+    tk = nullptr;
+    spr.fillSprite(COL_BG);
+    for (int i = 0; i < NPAL; i++) {
+      int y = (i / COLS) * SLOTH - (int)scroll, x = (i % COLS) * slotW;
+      if (y + SLOTH < 0 || y > CH) continue;
+      drawSwatchSpr(spr, tk, x, y, slotW, SLOTH, (uint8_t)i, i == theme.board_pal, LABELH, LABELF);
+    }
+    sprScrollBar(spr, CH, total, scroll);
+    spr.pushSprite(0, CY);
+  };
+  render();
+
+  bool wasDown = false, moved = false;
+  uint16_t pX = 0, pY = 0, lastY = 0;
+  float pScroll = 0, vel = 0;
+  uint32_t lastT = 0;
+  for (;;) {
+    touch->run();
+    bool down = touch->isPressed();
+    uint16_t tx = touch->x(), ty = touch->y();
+    uint32_t now = millis();
+    if (down && !wasDown) {
+      pX = tx; pY = ty; pScroll = scroll; moved = false; fling = 0; lastY = ty; lastT = now; vel = 0;
+    } else if (down && wasDown) {
+      int dy = (int)pY - (int)ty;
+      if (abs(dy) > 6) moved = true;
+      scroll = pScroll + dy;
+      uint32_t dt = now - lastT;
+      if (dt > 0) { vel = (float)((int)lastY - (int)ty) / (float)dt * 1000.0f; lastY = ty; lastT = now; }
+      render();
+    } else if (!down && wasDown) {
+      if (!moved) {
+        if (backTapped(pX, pY)) { spr.deleteSprite(); return; }
+        if ((int)pY >= CY) {
+          int r = ((int)pY - CY + (int)scroll) / SLOTH, c = (int)pX / slotW;
+          int idx = r * COLS + c;
+          if (c >= 0 && c < COLS && idx >= 0 && idx < NPAL && idx != theme.board_pal) {
+            theme.board_pal = (uint8_t)idx; theme.save();
+            render();
+          }
+        }
+      } else {
+        fling = vel;
+      }
+    } else if (fabs(fling) > 25) {
+      scroll += fling * 0.016f; fling *= 0.95f; render();
+    } else {
+      fling = 0;
+    }
+    wasDown = down;
+    delay(10);
+  }
 }
 
 // Settings.
@@ -2019,7 +2236,7 @@ static void settingsFlow() {
         case 0: if (h >= 0) { theme.cycleTheme(h); theme.save(); applyThemeToViewManager(); full(); } break;
         case 1: if (h >= 0) { theme.cycleAccent(h); theme.save(); applyThemeToViewManager(); render(); } break;
         case 2: if (h >= 0) { theme.cycleFontCol(h); theme.save(); applyThemeToViewManager(); recolor(); } break;
-        case 3: if (h >= 0) { theme.cycleBoardPal(h); theme.save(); render(); } break;
+        case 3: gridPickerScreen(); full(); break;   // full-screen swatch gallery
         // Changing language invalidates the loaded word list — drop it so the next
         // Dictionary/New Game load picks up the other .dwg.
         case 4: if (h >= 0) { g_lang = (g_lang == LANG_DE) ? LANG_EN : LANG_DE;
@@ -3116,6 +3333,18 @@ static bool cpuAbortOnBackTap() {
 static void gameOver() {
   g_game.applyFinalScores();
   uint8_t w = g_game.leader();
+
+  // Record the completed game. A win counts when a human finished on top (in a
+  // hotseat game that is always the case); the high score tracks the best final
+  // score any human reached this game.
+  g_stGames++;
+  if (!g_game.player(w).isCpu) g_stWins++;
+  for (uint8_t p = 0; p < g_game.numPlayers(); p++) {
+    const Player &pl = g_game.player(p);
+    if (!pl.isCpu && pl.score > (int)g_stHiScore) g_stHiScore = (uint16_t)pl.score;
+  }
+  statsSave();
+
   // "You" needs "You win", not "You wins".
   String wn = g_game.player(w).name;
   msgScreen("Game over", wn + (wn == "You" ? " win" : " wins"),
@@ -3432,6 +3661,8 @@ static void gameScreen() {
           String w;
           int pts = g_game.scorePending(&w);
           String who = g_game.player(g_game.current()).name;
+          // A human's move can set a personal best (the CPU's don't count).
+          if (!g_game.player(g_game.current()).isCpu) statsNoteWord(mainWord(w), pts);
           g_game.commit();
           g_selRack = -1;
           if (g_game.isOver()) { gSpritesEnd(); gameOver(); return; }
@@ -3510,8 +3741,8 @@ static void newGameFlow() {
 
 // Main menu (H4W9-style large rounded buttons)
 static const char *MENU_ITEMS[] = { "New Game", "Continue", "Board Builder",
-                                    "Dictionary Editor", "Settings" };
-static const int    MENU_COUNT  = 5;
+                                    "Dictionary Editor", "Statistics", "Settings" };
+static const int    MENU_COUNT  = 6;
 static const int    MENU_MARGIN = 16;
 static const int    MENU_TOP    = CONTENTY + 12;
 static const int    MENU_GAP    = 12;
@@ -3583,7 +3814,8 @@ static void openMenuItem(int i) {
     }
     case 2: boardBuilderScreen(); break;
     case 3: dictionaryScreen();   break;
-    case 4: settingsFlow();       break;
+    case 4: statsScreen();        break;
+    case 5: settingsFlow();       break;
     default: break;
   }
   drawMenu();
@@ -3649,11 +3881,12 @@ void setup() {
 #ifdef HAS_C5_SD
   sharedSPI.begin(SD_SCK, SD_MISO, SD_MOSI);
   delay(100);
-  if (!SD.begin(SD_CS, sharedSPI)) Serial.println(F("[" BOARD_NAME "] SD init failed"));
-  else Serial.println(F("[" BOARD_NAME "] SD OK"));
+  g_persistSD = SD.begin(SD_CS, sharedSPI);
 #else
-  if (!SD.begin(SD_CS)) Serial.println(F("[" BOARD_NAME "] SD init failed"));
+  g_persistSD = SD.begin(SD_CS);
 #endif
+  Serial.println(g_persistSD ? F("[" BOARD_NAME "] SD OK")
+                             : F("[" BOARD_NAME "] SD init failed (SPIFFS settings)"));
 
   // SPIFFS for settings (format on first boot).
   if (!SPIFFS.begin(true)) Serial.println(F("[" BOARD_NAME "] SPIFFS mount failed"));
@@ -3678,6 +3911,7 @@ void setup() {
   // Load persisted settings before anything draws.
   theme.load();
   cfgLoad();
+  statsLoad();
   // Both of these read the SD card, so they belong after it is mounted and
   // after cfgLoad() has said which board to use.
   gridBegin(g_gridName);   // premium-square layout (Board Builder)
